@@ -1,0 +1,116 @@
+pipeline {
+    agent any
+
+    options {
+        disableConcurrentBuilds()
+        timestamps()
+    }
+
+    environment {
+        AWS_DEFAULT_REGION = 'ap-south-1'
+        AWS_REGION = 'ap-south-1'
+        TF_IN_AUTOMATION = 'true'
+        TF_INPUT = 'false'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Terraform Init') {
+            steps {
+                dir('task-4-csv-dynamodb/terraform') {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-terraform-creds'
+                    ]]) {
+                        sh 'terraform init -input=false'
+                    }
+                }
+            }
+        }
+
+        stage('Terraform Format') {
+            steps {
+                dir('task-4-csv-dynamodb/terraform') {
+                    sh 'terraform fmt -check -recursive'
+                }
+            }
+        }
+
+        stage('Terraform Validate') {
+            steps {
+                dir('task-4-csv-dynamodb/terraform') {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-terraform-creds'
+                    ]]) {
+                        sh 'terraform validate'
+                    }
+                }
+            }
+        }
+
+        stage('Terraform Plan') {
+            steps {
+                dir('task-4-csv-dynamodb/terraform') {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-terraform-creds'
+                    ]]) {
+                        sh '''
+                            terraform plan \
+                              -input=false \
+                              -out=tfplan
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Terraform Apply') {
+            steps {
+                input message: 'Approve deployment of Task 4 infrastructure?', ok: 'Deploy'
+                dir('task-4-csv-dynamodb/terraform') {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-terraform-creds'
+                    ]]) {
+                        sh 'terraform apply -input=false -auto-approve tfplan'
+                    }
+                }
+            }
+        }
+
+        stage('Deployment Verification') {
+            steps {
+                dir('task-4-csv-dynamodb/terraform') {
+                    withCredentials([[
+                        $class: 'AmazonWebServicesCredentialsBinding',
+                        credentialsId: 'aws-terraform-creds'
+                    ]]) {
+                        sh '''
+                            FUNCTION_NAME=$(terraform output -raw lambda_function_name)
+                            aws lambda get-function \
+                              --function-name "$FUNCTION_NAME" \
+                              --region "$AWS_REGION" \
+                              --query 'Configuration.[FunctionName,State,LastUpdateStatus]' \
+                              --output table
+                        '''
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Task 4 infrastructure deployment completed successfully.'
+        }
+        failure {
+            echo 'Task 4 pipeline failed. Check the stage logs.'
+        }
+}
